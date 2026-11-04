@@ -1,0 +1,10 @@
+# 这个仓库的东西最终都在 Linux 上被 make/sh/python 读取，
+# 一律强制 LF。否则 Windows 上提交后在 Actions 里跑会出现
+#   /usr/sbin/5g-watchdog: line 1: #!/bin/sh^M: bad interpreter
+# 这类只在 CI 才暴露的问题。
+* text=auto eol=lf
+
+# 二进制/无需处理的
+*.png binary
+*.jpg binary
+*.bin binary
