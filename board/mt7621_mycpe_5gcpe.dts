@@ -1,0 +1,278 @@
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
+/*
+ * MyCPE-5G : MT7621A + MT7603E(2.4G) + MT7613BE(5G) + 128MiB 并行 NAND
+ *
+ * 自研板卡通用模板。标 [FILL] 的地方必须按原理图改成你板子上的真实 GPIO，
+ * 否则表现是：按键无响应 / LED 常亮不灭 / 复位进不去 failsafe。
+ *
+ * 改动清单（按优先级）：
+ *   1. memory 节点：128MiB=0x8000000，256MiB 改成 0x10000000
+ *   2. 5 个 LED + 2 个按键的 GPIO 编号（MT7621 GPIO 0..94）
+ *   3. factory 分区偏移与 WiFi 校准数据偏移（2.4G 在 0x0，5G 在 0x8000）
+ *   4. 分区偏移必须和 U-Boot 的 nand read/write 地址严格对齐
+ */
+
+#include "mt7621.dtsi"
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+
+/ {
+	compatible = "mycpe,5gcpe", "mediatek,mt7621-soc";
+	model = "MyCPE 5G CPE (MT7621)";
+
+	aliases {
+		led-boot = &led_power;
+		led-failsafe = &led_power;
+		led-running = &led_power;
+		led-upgrade = &led_power;
+	};
+
+	chosen {
+		bootargs = "console=ttyS0,115200";
+	};
+
+	memory@0 {
+		device_type = "memory";
+		reg = <0x0 0x8000000>;		/* 128 MiB，256MiB 改 0x10000000 */
+	};
+
+	keys {
+		compatible = "gpio-keys";
+
+		reset {
+			label = "reset";
+			gpios = <&gpio 18 GPIO_ACTIVE_LOW>;	/* [FILL] */
+			linux,code = <KEY_RESTART>;
+		};
+
+		wps {
+			label = "wps";
+			gpios = <&gpio 16 GPIO_ACTIVE_LOW>;	/* [FILL] */
+			linux,code = <KEY_WPS_BUTTON>;
+		};
+	};
+
+	leds {
+		compatible = "gpio-leds";
+
+		led_power: power {
+			label = "green:power";
+			gpios = <&gpio 4 GPIO_ACTIVE_LOW>;	/* [FILL] */
+			default-state = "on";
+		};
+
+		wan {
+			label = "green:wan";
+			gpios = <&gpio 5 GPIO_ACTIVE_LOW>;	/* [FILL] */
+		};
+
+		led_5g: wwan {
+			label = "green:5g";
+			gpios = <&gpio 6 GPIO_ACTIVE_LOW>;	/* [FILL] */
+		};
+
+		wlan2g {
+			label = "green:wlan2g";
+			gpios = <&gpio 7 GPIO_ACTIVE_LOW>;	/* [FILL] */
+		};
+
+		wlan5g {
+			label = "green:wlan5g";
+			gpios = <&gpio 8 GPIO_ACTIVE_LOW>;	/* [FILL] */
+		};
+	};
+
+	/*
+	 * 5G 模组供电使能（M.2 的 3.3V/5V 负载开关）。
+	 * 板上没有这颗控制脚就把 status 留在 disabled。
+	 */
+	reg_modem: regulator-modem {
+		compatible = "regulator-fixed";
+		regulator-name = "modem-power";
+		gpio = <&gpio 9 GPIO_ACTIVE_HIGH>;		/* [FILL] */
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		enable-active-high;
+		regulator-always-on;
+		status = "disabled";
+	};
+};
+
+/* ---------------- 128MiB 并行 NAND（MT7621 NFC） ---------------- */
+/*
+ * 48 脚 TSOP 8-bit 并行 NAND，走 SoC 内置 NFC（mt7621-nfc）：
+ *   - ECC 由控制器内部完成，DTS 不需要配 ecc 参数
+ *   - 不需要 pinctrl，也不需要 nmbm
+ *   - 坏块由上层 UBI 管理，所以 kernel/ubi 分区偏移可以写死
+ *
+ * 只有当你希望"坏块被透明映射成连续空间"（U-Boot 也按 nmbm 布局读写，
+ * 常见于部分 OEM 方案）时，才在 &nand 里加：
+ *      mediatek,nmbm;
+ *      mediatek,bmt-max-ratio = <1>;
+ *      mediatek,bmt-max-reserved-blocks = <64>;
+ * 自研板 + 自己的 U-Boot 一般不加，加了反而会和 U-Boot 的裸地址读写打架。
+ *
+ * 分区偏移必须和 U-Boot 启动命令一致，例如 kernel 在 0x140000，
+ * bootcmd 里就得是 nand read 0x82000000 0x140000 <size>。
+ */
+&nand {
+	status = "okay";
+
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		partition@0 {
+			label = "bootloader";
+			reg = <0x0 0x80000>;		/* U-Boot 512K */
+			read-only;
+		};
+
+		partition@80000 {
+			label = "bootloader-env";
+			reg = <0x80000 0x40000>;	/* U-Boot 环境变量 256K */
+			read-only;
+		};
+
+		factory: partition@c0000 {
+			label = "factory";
+			reg = <0xc0000 0x80000>;	/* WiFi EEPROM 512K */
+			read-only;
+		};
+
+		partition@140000 {
+			label = "kernel";
+			reg = <0x140000 0x600000>;	/* 6M */
+		};
+
+		partition@740000 {
+			label = "ubi";
+			reg = <0x740000 0x78c0000>;	/* 126.75M，含坏块冗余 */
+		};
+	};
+};
+
+/* ---------------- PCIe 双频 WiFi ---------------- */
+&pcie {
+	status = "okay";
+};
+
+/* PCIe0 : MT7603E —— 2.4GHz 2x2 */
+&pcie0 {
+	mt76@0,0 {
+		compatible = "mediatek,mt76";
+		reg = <0x0000 0 0 0 0>;
+		mediatek,mtd-eeprom = <&factory 0x0000>;
+		ieee80211-freq-limit = <2400000 2500000>;
+	};
+};
+
+/* PCIe1 : MT7613BE —— 5GHz 2x2 (由 mt7615e 驱动) */
+&pcie1 {
+	mt76@0,0 {
+		compatible = "mediatek,mt76";
+		reg = <0x0000 0 0 0 0>;
+		mediatek,mtd-eeprom = <&factory 0x8000>;
+		ieee80211-freq-limit = <4900000 5925000>;
+	};
+};
+
+/* ---------------- 以太网 : 4 LAN + 1 WAN ---------------- */
+&gmac1 {
+	status = "okay";
+	label = "wan";
+	phy-handle = <&ethphy4>;
+};
+
+&mdio {
+	ethphy4: ethernet-phy@4 {
+		reg = <4>;
+	};
+};
+
+&switch0 {
+	ports {
+		port@0 {
+			status = "okay";
+			label = "lan1";
+		};
+
+		port@1 {
+			status = "okay";
+			label = "lan2";
+		};
+
+		port@2 {
+			status = "okay";
+			label = "lan3";
+		};
+
+		port@3 {
+			status = "okay";
+			label = "lan4";
+		};
+	};
+};
+
+/* ---------------- USB 3.0 : 5G 模组（M.2 / USB 模式） ---------------- */
+&xhci {
+	status = "okay";
+};
+
+&state_default {
+	gpio {
+		groups = "uart2", "uart3", "jtag";
+		function = "gpio";
+	};
+};
+
+/*
+ * ============================================================
+ * 备选：如果后续改版换成 8 脚 SPI-NAND（W25N01GV / GD5F1GQ5 等）
+ * 注释掉上面的 &nand 块，改用下面这段。
+ * MT7621 的 SPI-NAND 有两条路：
+ *   A) 普通 SPI 控制器（下面这段，function "spi"）
+ *   B) NFC 的 SPI 模式（pinctrl-0 = <&nand_pins>，function "nand1"）
+ * 判断：dmesg 里没有 "spi-nand ... found" 就先试 B。
+ * ============================================================
+ *
+ * &spi0 {
+ *	status = "okay";
+ *
+ *	flash@0 {
+ *		compatible = "spi-nand";
+ *		reg = <0>;
+ *		spi-max-frequency = <50000000>;
+ *
+ *		partitions {
+ *			compatible = "fixed-partitions";
+ *			#address-cells = <1>;
+ *			#size-cells = <1>;
+ *
+ *			partition@0 {
+ *				label = "bootloader";
+ *				reg = <0x0 0x80000>;
+ *				read-only;
+ *			};
+ *
+ *			factory: partition@80000 {
+ *				label = "factory";
+ *				reg = <0x80000 0x80000>;
+ *				read-only;
+ *			};
+ *
+ *			partition@100000 {
+ *				label = "kernel";
+ *				reg = <0x100000 0x600000>;
+ *			};
+ *
+ *			partition@700000 {
+ *				label = "ubi";
+ *				reg = <0x700000 0x7900000>;
+ *			};
+ *		};
+ *	};
+ * };
+ */

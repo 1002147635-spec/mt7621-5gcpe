@@ -1,0 +1,3 @@
+# 额外 feed：移远/广和通等 5G 模组管理（qmodem）
+# 提供 luci-app-qmodem、quectel-CM-5G、AT 工具、短信、多 WAN
+src-git modem https://github.com/FUjr/modem_feeds.git;main

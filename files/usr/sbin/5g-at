@@ -1,0 +1,59 @@
+#!/bin/sh
+#
+# 移远 5G 模组调试工具
+#
+#   5g-at 'AT+QENG="servingcell"'   直接发一条 AT 指令
+#   5g-at info                      一次性打印模组型号/注网/信号
+#   5g-at ports                     列出模组串口
+#
+# AT 口：RM500U/RM520N 默认 /dev/ttyUSB2（AT_PORT 可覆盖）
+#        PCIe/MHI 模式下没有 ttyUSB，需要用 qmodem 的 AT over MHI
+#
+
+PORT="${AT_PORT:-/dev/ttyUSB2}"
+
+ports() {
+	for p in /dev/ttyUSB*; do
+		[ -e "$p" ] || continue
+		echo "== $p"
+		timeout 1 cat "$p" 2>/dev/null | strings | head -3
+	done
+}
+
+at() {
+	[ -c "$PORT" ] || { echo "找不到 AT 串口 $PORT（用 5g-at ports 看实际节点）" >&2; return 1; }
+
+	stty -F "$PORT" 115200 raw -echo 2>/dev/null
+
+	tmp=$(mktemp)
+	cat "$PORT" > "$tmp" 2>/dev/null &
+	reader=$!
+	sleep 0.3
+
+	printf '%s\r' "$1" > "$PORT"
+	sleep 1.5
+
+	kill "$reader" 2>/dev/null
+	wait "$reader" 2>/dev/null
+	tr -d '\r' < "$tmp" | sed '/^$/d'
+	rm -f "$tmp"
+}
+
+case "$1" in
+	ports)
+		ports
+		;;
+	info)
+		for cmd in 'ATI' 'AT+CPIN?' 'AT+CSQ' 'AT+COPS?' \
+			'AT+QNWINFO' 'AT+QENG="servingcell"'; do
+			echo "----- $cmd"
+			at "$cmd"
+		 done
+		;;
+	'')
+		sed -n '2,12p' "$0"
+		;;
+	*)
+		at "$*"
+		;;
+esac

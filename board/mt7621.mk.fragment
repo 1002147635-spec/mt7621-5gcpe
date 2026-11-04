@@ -1,0 +1,30 @@
+#
+# 追加到 target/linux/ramips/image/mt7621.mk 末尾
+# 由 scripts/apply-board.py 自动注入，勿手工改缩进（Makefile 用 2 空格）
+#
+# IMAGE_SIZE 123648k = ubi 分区 0x78C0000 的大小，改了 DTS 分区要同步改这里
+#
+# BLOCKSIZE / PAGESIZE 是显式写死的，不依赖 $(Device/nand) 的隐式默认：
+#   128k / 2048 → 2K page + 128K block 的片子（K9F1G08、TC58NVG0S3、MT29F1G08）
+#   256k / 4096 → 4K page + 256K block 的片子（TC58NVG2S0、MT29F4G08）
+# 写错的表现：镜像能编出来，但板上挂 ubi 报 "UBI error: cannot attach mtd3"
+# 或者满屏 bad eraseblock。不确定就查芯片 datasheet 的 page size。
+#
+# KERNEL_SIZE 6m 必须等于 DTS 里 kernel 分区大小（0x600000），它同时是内核体积上限检查。
+#
+define Device/mycpe_5gcpe
+  $(Device/nand)
+  $(Device/uimage-lzma-loader)
+  BLOCKSIZE := 128k
+  PAGESIZE := 2048
+  KERNEL_SIZE := 6m
+  IMAGE_SIZE := 123648k
+  DEVICE_VENDOR := MyCPE
+  DEVICE_MODEL := 5G CPE (MT7621)
+  DEVICE_DTS := mt7621_mycpe_5gcpe
+  DEVICE_PACKAGES := kmod-mt7603 kmod-mt7615e kmod-mt7663-firmware-ap \
+	kmod-usb3 kmod-usb-net-qmi-wwan kmod-usb-net-cdc-mbim \
+	kmod-usb-serial-option usb-modeswitch uqmi umbim
+  SUPPORTED_DEVICES += mycpe,5gcpe
+endef
+TARGET_DEVICES += mycpe_5gcpe

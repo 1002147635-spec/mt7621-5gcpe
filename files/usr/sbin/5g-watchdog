@@ -1,0 +1,75 @@
+#!/bin/sh
+#
+# 5G 拨号看门狗：链路掉了自动 ifup，连续失败到阈值就 USB 重新授权（等效拔插）
+#
+# 可调环境变量（在 /etc/config/5gcpe 里改，见 init.d）：
+#   IFACE      拨号接口名，默认 wwan
+#   INTERVAL   检测周期秒，默认 20
+#   SOFT_FAIL  连续失败多少次触发 ifup，默认 3
+#   HARD_FAIL  连续失败多少次触发 USB 复位，默认 9
+#
+
+IFACE="${IFACE:-wwan}"
+INTERVAL="${INTERVAL:-20}"
+SOFT_FAIL="${SOFT_FAIL:-3}"
+HARD_FAIL="${HARD_FAIL:-9}"
+
+LED=/sys/class/leds/green:5g/brightness
+LOG_TAG=5g-watchdog
+
+log() { logger -t "$LOG_TAG" "$*"; }
+
+set_led() {
+	[ -e "$LED" ] && echo "$1" > "$LED" 2>/dev/null
+}
+
+iface_up() {
+	ubus call network.interface."$IFACE" status 2>/dev/null | grep -q '"up": true'
+}
+
+usb_reset() {
+	reset_done=0
+	for d in /sys/bus/usb/devices/*/idVendor; do
+		[ -r "$d" ] || continue
+		# 2c7c = Quectel；如果换模组厂商，把 VID 加进下面这个 case
+		case "$(cat "$d" 2>/dev/null)" in
+		2c7c) ;;
+		*) continue ;;
+		esac
+		p=$(dirname "$d")
+		[ -e "$p/authorized" ] || continue
+		log "USB 重新授权：$p"
+		echo 0 > "$p/authorized" 2>/dev/null
+		sleep 2
+		echo 1 > "$p/authorized" 2>/dev/null
+		reset_done=1
+	done
+	[ "$reset_done" = 1 ] || log "没找到 Quectel USB 设备，跳过硬件复位"
+}
+
+fail=0
+log "启动，接口=$IFACE 周期=${INTERVAL}s"
+
+while :; do
+	if iface_up; then
+		if [ "$fail" -ge "$SOFT_FAIL" ]; then
+			log "链路恢复"
+		fi
+		fail=0
+		set_led 1
+	else
+		fail=$((fail + 1))
+		set_led 0
+		log "链路断开（连续 $fail 次）"
+
+		if [ "$fail" -eq "$SOFT_FAIL" ]; then
+			log "执行 ifup $IFACE"
+			ifup "$IFACE"
+		elif [ "$fail" -ge "$HARD_FAIL" ] && [ $((fail % HARD_FAIL)) -eq 0 ]; then
+			usb_reset
+			sleep 5
+			ifup "$IFACE"
+		fi
+	fi
+	sleep "$INTERVAL"
+done

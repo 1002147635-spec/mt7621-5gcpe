@@ -1,0 +1,62 @@
+#!/bin/sh
+#
+# 首次启动初始化：5G 模组拨号口 + 无线 + 时区 + 看门狗
+# 放在 /etc/uci-defaults/ 下，执行成功（exit 0）后 OpenWrt 会自动删除本脚本。
+#
+. /lib/functions.sh
+
+BOARD=$(cat /tmp/sysinfo/board_name 2>/dev/null)
+[ "$BOARD" = "mycpe,5gcpe" ] || exit 0
+
+# ---------------- 基本系统 ----------------
+uci -q set system.@system[0].hostname='MyCPE-5G'
+uci -q set system.@system[0].timezone='CST-8'
+uci -q set system.@system[0].zonename='Asia/Shanghai'
+uci -q set system.ntp.enabled='1'
+uci -q delete system.ntp.server
+uci -q add_list system.ntp.server='ntp.aliyun.com'
+uci -q add_list system.ntp.server='cn.pool.ntp.org'
+uci -q commit system
+
+# ---------------- 5G 模组 WAN ----------------
+# APN 按运营商改：移动 cmnet / 联通 3gnet / 电信 ctnet
+uci -q delete network.wwan
+uci set network.wwan='interface'
+uci set network.wwan.proto='qmi'
+uci set network.wwan.device='/dev/cdc-wdm0'
+uci set network.wwan.apn='3gnet'
+uci set network.wwan.pdptype='ipv4v6'
+uci set network.wwan.auth='none'
+uci set network.wwan.auto='1'
+uci set network.wwan.metric='10'
+uci -q commit network
+
+# 有线 WAN 降为备用链路（想反过来就把两个 metric 对调）
+uci -q set network.wan.metric='20'
+uci -q commit network
+
+# 把 wwan 塞进 wan 防火墙区域
+if ! uci -q get firewall.@zone[1].network | grep -qw wwan; then
+	uci -q add_list firewall.@zone[1].network='wwan'
+	uci -q commit firewall
+fi
+
+# ---------------- 无线 ----------------
+# 双频默认开机、同 SSID，密码 12345678（出货务必改）
+i=0
+while [ $i -lt 2 ]; do
+	uci -q set wireless.@wifi-device[$i].disabled='0'
+	uci -q set wireless.@wifi-device[$i].country='CN'
+	uci -q set wireless.@wifi-iface[$i].disabled='0'
+	uci -q set wireless.@wifi-iface[$i].ssid='MyCPE-5G'
+	uci -q set wireless.@wifi-iface[$i].encryption='psk2+ccmp'
+	uci -q set wireless.@wifi-iface[$i].key='12345678'
+	i=$((i + 1))
+done
+uci -q commit wireless
+
+# ---------------- 服务 ----------------
+/etc/init.d/5g-watchdog enable 2>/dev/null
+/etc/init.d/5g-watchdog start 2>/dev/null
+
+exit 0

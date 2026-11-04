@@ -1,0 +1,5 @@
+openwrt/
+out/
+dl/
+__pycache__/
+*.pyc

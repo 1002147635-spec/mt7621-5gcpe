@@ -1,0 +1,3 @@
+	mycpe,5gcpe)
+		nand_do_upgrade "$1"
+		;;

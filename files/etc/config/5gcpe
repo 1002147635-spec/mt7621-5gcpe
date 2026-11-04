@@ -1,0 +1,9 @@
+config main 'main'
+	# 拨号接口名（与 /etc/config/network 里的 interface 段名一致）
+	option iface 'wwan'
+	# 看门狗检测周期（秒）
+	option interval '20'
+	# 连续失败几次触发 ifup
+	option soft_fail '3'
+	# 连续失败几次触发 USB 重新授权
+	option hard_fail '9'
